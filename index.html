@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brights Youth Community — Fund Dashboard</title>
+<link rel="icon" type="image/jpeg" href="./logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="config-banner" id="configBanner">
+  <div class="wrap">⚠ Firebase isn't configured yet — open this file, find <code>firebaseConfig</code> near the top of the script, and paste in your project's keys. Data won't save until you do.</div>
+</div>
+
+<div class="topbar">
+  <div class="wrap">
+    <div class="brand">
+      <img src="./logo.jpg" alt="Brights Youth Community logo" class="brand-logo">
+      <div>
+        <h1>BRIGHTS</h1>
+        <p>YOUTH COMMUNITY · FUND DASHBOARD</p>
+      </div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="members">Members</button>
+      <button class="tab-btn" data-tab="fund">Fund log</button>
+      <button class="tab-btn admin-only" data-tab="settings">Settings</button>
+    </div>
+    <div class="admin-zone">
+      <span class="admin-pill off" id="adminPill">Viewing only</span>
+      <button class="btn btn-sm" id="adminLoginBtn">Admin login</button>
+      <button class="btn btn-sm admin-only" id="adminLogoutBtn">Log out</button>
+    </div>
+  </div>
+</div>
+<div class="adminbar" id="adminBar">
+  <div class="wrap">You're in admin mode — edits you make are visible to everyone who opens this dashboard.</div>
+</div>
+
+<div class="wrap">
+
+  <!-- ================= OVERVIEW ================= -->
+  <div class="section active" id="section-overview">
+    <div class="panel">
+      <div class="panel-head"><div><h2>Payment status by month</h2><div class="sub">Tap a month to see who's paid and who hasn't</div></div></div>
+      <div class="slicer" id="monthSlicer"></div>
+      <div class="split-tables">
+        <div>
+          <h3 class="split-title paid">Paid <span class="count-pill" id="paidSplitCount">0</span></h3>
+          <div id="paidSplitTable"></div>
+        </div>
+        <div>
+          <h3 class="split-title unpaid">Not paid <span class="count-pill" id="unpaidSplitCount">0</span></h3>
+          <div id="unpaidSplitTable"></div>
+        </div>
+      </div>
+    </div>
+    <div class="grid-stats">
+      <div class="stat c-members"><div class="label">Members</div><div class="value" id="statMembers">0</div></div>
+      <div class="stat c-collected"><div class="label" id="statCollectedLabel">Collected this month</div><div class="value" id="statCollected">₹0</div></div>
+      <div class="stat c-overall"><div class="label">Overall collected</div><div class="value" id="statOverall">₹0</div></div>
+      <div class="stat c-spent"><div class="label">Total spent</div><div class="value" id="statSpent">₹0</div></div>
+      <div class="stat c-balance"><div class="label">Balance in hand</div><div class="value" id="statBalance">₹0</div></div>
+    </div>
+    <div class="row2">
+      <div class="panel">
+        <div class="panel-head"><div><h2>Contribution, month on month</h2><div class="sub">Actual amount collected each month</div></div></div>
+        <div class="chart-bars" id="chartBars"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>This month's split</h2><div class="sub" id="monthSplitSub">—</div></div></div>
+        <div class="pinwheel-wrap">
+          <svg width="160" height="160" viewBox="0 0 160 160" id="donutSvg"></svg>
+          <div class="legend" id="donutLegend"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MEMBERS ================= -->
+  <div class="section" id="section-members">
+    <div class="panel admin-only" id="memberFormPanel">
+      <div class="panel-head">
+        <div><h2 id="memberFormTitle">Add a member</h2><div class="sub">Full profile and contact details</div></div>
+        <button class="btn btn-sm" id="cancelEditBtn" style="display:none;">Cancel edit</button>
+      </div>
+      <div class="photo-picker">
+        <img class="photo-preview" id="newPhotoPreview" alt="">
+        <button class="btn btn-sm file-btn">Choose photo<input type="file" id="newPhotoInput" accept="image/*"></button>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Full name</label><input type="text" id="fName" placeholder="e.g. Aditi Sharma"></div>
+        <div class="field"><label>Phone</label><input type="text" id="fPhone" placeholder="98xxxxxxxx"></div>
+        <div class="field"><label>Address</label><input type="text" id="fAddress" placeholder="House no, street, city"></div>
+        <div class="field"><label>Parent / guardian name</label><input type="text" id="fParentName" placeholder="e.g. Ramesh Sharma"></div>
+        <div class="field"><label>Parent / guardian phone</label><input type="text" id="fParentPhone" placeholder="98xxxxxxxx"></div>
+        <div class="field"><label>Education</label><input type="text" id="fEducation" placeholder="e.g. B.Sc Computer Science, 2nd year"></div>
+        <div class="field">
+          <label>Status</label>
+          <select id="fStatus"><option value="Studying">Studying</option><option value="Working">Working</option></select>
+        </div>
+        <div class="field"><label id="fInstLabel">School / college</label><input type="text" id="fInstitution" placeholder="Name of institution"></div>
+        <div class="field">
+          <label>Position in community</label>
+          <select id="fPosition">
+            <option value="">Member (no position)</option>
+            <option value="President">President</option>
+            <option value="Vice President">Vice President</option>
+            <option value="Secretary">Secretary</option>
+            <option value="Joint Secretary">Joint Secretary</option>
+            <option value="Treasurer">Treasurer</option>
+            <option value="Coordinator">Coordinator</option>
+            <option value="Volunteer">Volunteer</option>
+            <option value="__other">Other (type below)</option>
+          </select>
+        </div>
+        <div class="field" id="fPositionOtherWrap" style="display:none;">
+          <label>Custom position</label>
+          <input type="text" id="fPositionOther" placeholder="e.g. Event Head">
+        </div>
+      </div>
+      <button class="btn btn-primary" id="saveMemberBtn">Add member</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div><h2>Members · <span id="monthLabelMembers"></span></h2><div class="sub"><span id="paidCountText">0 paid</span> · <span id="unpaidCountText">0 not paid</span></div></div>
+        <div class="quick-actions">
+          <input type="month" id="monthPicker" style="width:auto;">
+          <button class="btn btn-sm admin-only" id="markAllPaidBtn">Mark all paid</button>
+          <button class="btn btn-sm admin-only" id="markAllUnpaidBtn">Mark all not paid</button>
+        </div>
+      </div>
+      <div class="view-only-note">Viewing only — log in as admin to add members or edit payment status.</div>
+      <div id="membersTableWrap"></div>
+    </div>
+  </div>
+
+  <!-- ================= FUND LOG ================= -->
+  <div class="section" id="section-fund">
+    <div class="panel admin-only">
+      <div class="panel-head"><div><h2>Add a transaction</h2><div class="sub">Record extra income (donations, events) or expenses</div></div></div>
+      <div class="field-row">
+        <div class="field"><label>Date</label><input type="date" id="txnDate"></div>
+        <div class="field"><label>Type</label><select id="txnType"><option value="expense">Expense</option><option value="income">Extra income</option></select></div>
+        <div class="field"><label>Description</label><input type="text" id="txnDesc" placeholder="e.g. Snacks for meetup"></div>
+        <div class="field"><label>Amount (₹)</label><input type="number" id="txnAmount" min="0" placeholder="0"></div>
+      </div>
+      <button class="btn btn-primary" id="addTxnBtn">Add transaction</button>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>Transaction history</h2><div class="sub">All fund movements outside membership fees</div></div></div>
+      <div class="view-only-note">Viewing only — log in as admin to add or remove transactions.</div>
+      <div id="txnTableWrap"></div>
+    </div>
+  </div>
+
+  <!-- ================= SETTINGS (admin only tab) ================= -->
+  <div class="section" id="section-settings">
+    <div class="panel" style="max-width:480px;">
+      <div class="panel-head"><div><h2>Fund settings</h2><div class="sub">Defaults used across the dashboard</div></div></div>
+      <div class="field"><label>Default monthly contribution (₹)</label><input type="number" id="monthlyFeeInput" min="0"></div>
+      <div class="field"><label>Opening balance (₹)</label><input type="number" id="openingBalanceInput" min="0"></div>
+      <button class="btn btn-primary" id="saveSettingsBtn">Save settings</button>
+      <span class="save-msg" id="settingsSaveMsg">Saved</span>
+      <p class="note">The default contribution pre-fills when marking someone paid, but you can type a different amount for any member in any month — useful when someone pays more or less than usual.</p>
+    </div>
+    <div class="panel" style="max-width:480px;">
+      <div class="panel-head"><div><h2>Admin PIN</h2><div class="sub">Change the PIN used to unlock editing</div></div></div>
+      <div class="field"><label>New PIN</label><input type="password" id="newPinInput" placeholder="4+ digits"></div>
+      <button class="btn btn-primary" id="changePinBtn">Update PIN</button>
+      <p class="note">Anyone with this PIN can edit the dashboard. Data is stored in the app's shared storage, so keep the PIN somewhere safe — this is a lightweight lock, not full security.</p>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/12.16.0/firebase-firestore-compat.min.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
