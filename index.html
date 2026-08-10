@@ -46,6 +46,25 @@
 
   <!-- ================= OVERVIEW ================= -->
   <div class="section active" id="section-overview">
+    <div class="panel birthday-panel" id="birthdayPanel">
+      <div class="panel-head"><div><h2>🎉 Birthdays today</h2><div class="sub">Wish them a happy birthday!</div></div></div>
+      <div class="birthday-content">
+        <div class="birthday-strip" id="birthdayStrip"></div>
+        <div class="birthday-message-wrap">
+          <div class="birthday-message" id="birthdayMessageDisplay"></div>
+          <div class="admin-only">
+            <label style="margin-bottom:6px;">Your message to today's birthday members</label>
+            <textarea id="birthdayMessageInput" rows="2" placeholder="Write a birthday message for everyone to see..."></textarea>
+            <button class="btn btn-sm btn-primary" id="saveBirthdayMsgBtn">Save message</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>Find a member</h2><div class="sub">Search by name, phone or position — click a result to see their full profile</div></div></div>
+      <input type="text" id="memberSearchInput" placeholder="Search members...">
+      <div id="memberSearchResults"></div>
+    </div>
     <div class="panel">
       <div class="panel-head"><div><h2>Payment status by month</h2><div class="sub">Tap a month to see who's paid and who hasn't</div></div></div>
       <div class="slicer" id="monthSlicer"></div>
@@ -100,6 +119,7 @@
         <div class="field"><label>Parent / guardian name</label><input type="text" id="fParentName" placeholder="e.g. Ramesh Sharma"></div>
         <div class="field"><label>Parent / guardian phone</label><input type="text" id="fParentPhone" placeholder="98xxxxxxxx"></div>
         <div class="field"><label>Education</label><input type="text" id="fEducation" placeholder="e.g. B.Sc Computer Science, 2nd year"></div>
+        <div class="field"><label>Date of birth</label><input type="date" id="fDob"><div class="dob-age-hint" id="fDobAgeHint"></div></div>
         <div class="field">
           <label>Status</label>
           <select id="fStatus"><option value="Studying">Studying</option><option value="Working">Working</option></select>
@@ -116,6 +136,7 @@
             <option value="Treasurer">Treasurer</option>
             <option value="Coordinator">Coordinator</option>
             <option value="Volunteer">Volunteer</option>
+            <option value="Event Head">Event Head</option>
             <option value="__other">Other (type below)</option>
           </select>
         </div>
