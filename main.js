@@ -50,18 +50,62 @@ let monthCache = {};
 let currentMonth = new Date().toISOString().slice(0,7);
 let newPhotoData = '';
 let isAdmin = false;
+let birthdayMessage = '';
 let editingMemberId = null;
 
 function fmtMoney(n){ n = Math.round(n||0); return '₹' + n.toLocaleString('en-IN'); }
 function initials(name){ return (name||'?').trim().split(/\s+/).slice(0,2).map(w=>w[0]?.toUpperCase()||'').join(''); }
 function colorFor(idx){ return PALETTE[idx % PALETTE.length]; }
+
+/* ---------- member sort order ----------
+   1. Top leadership positions, in this exact order
+   2. Any custom/typed-in position ("Other") not covered below
+   3. Standard committee positions from the dropdown
+   4. Plain "Member" (no position) — always last
+*/
+const POSITIONS_ORDER = ['Founder/Treasurer','Founder/Adviser','Founder','President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer','Event Head'];
+
+function positionRank(pos) {
+  const p = (pos || '').trim();
+  if (p === '') return 1000;                     // Plain Member — always last
+  const idx = POSITIONS_ORDER.indexOf(p);
+  if (idx !== -1) return idx;                   // Defined positions (0 to 9)
+  return POSITIONS_ORDER.length;                // Custom/typed positions — right after defined list (10)
+}
+function getSortedMembers(){
+  return [...members].sort((a,b)=>{
+    const ra = positionRank(a.position), rb = positionRank(b.position);
+    if(ra !== rb) return ra - rb;
+    return (a.name||'').localeCompare(b.name||'');
+  });
+}
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function formatDob(dob){
+  const parts = dob.split('-');
+  if(parts.length !== 3) return dob;
+  const [y,mo,d] = parts;
+  return new Date(y, mo-1, d).toLocaleDateString('default', {day:'numeric', month:'long', year:'numeric'});
+}
+function calcAge(dob){
+  if(!dob) return null;
+  const parts = dob.split('-');
+  if(parts.length !== 3) return null;
+  const [y,mo,d] = parts.map(Number);
+  const birth = new Date(y, mo-1, d);
+  if(isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const hasHadBirthdayThisYear = (today.getMonth() > birth.getMonth()) ||
+    (today.getMonth() === birth.getMonth() && today.getDate() >= birth.getDate());
+  if(!hasHadBirthdayThisYear) age--;
+  return age >= 0 ? age : null;
+}
 
 /* ---------- custom dialogs (native prompt/alert/confirm are blocked in this preview) ---------- */
-function openModal(html){
+function openModal(html, extraClass){
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal-box">${html}</div>`;
+  overlay.innerHTML = `<div class="modal-box ${extraClass||''}">${html}</div>`;
   document.body.appendChild(overlay);
   return overlay;
 }
@@ -137,12 +181,14 @@ async function loadAll(){
   members = await storeGet('members', []);
   settings = await storeGet('settings', { monthlyFee: 200, openingBalance: 0 });
   transactions = await storeGet('transactions', []);
+  birthdayMessage = await storeGet('birthday-message', '');
   document.getElementById('monthlyFeeInput').value = settings.monthlyFee;
   document.getElementById('openingBalanceInput').value = settings.openingBalance;
   document.getElementById('monthPicker').value = currentMonth;
   await ensureMonthLoaded(currentMonth);
   await ensureAllMonthsLoaded();
   render();
+  maybeShowUpcomingBirthdaysPopup();
 }
 async function ensureMonthLoaded(month){
   if(monthCache[month]) return monthCache[month];
@@ -169,6 +215,149 @@ async function render(){
   renderDonut();
   await renderMonthSlicer();
   renderSplitTables();
+  renderBirthdays();
+}
+
+function renderBirthdays(){
+  const panel = document.getElementById('birthdayPanel');
+  const strip = document.getElementById('birthdayStrip');
+  const today = new Date();
+  const todayKey = String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
+
+  const celebrants = members.filter(m=>{
+    if(!m.dob) return false;
+    const parts = m.dob.split('-'); // YYYY-MM-DD
+    if(parts.length !== 3) return false;
+    const key = parts[1] + '-' + parts[2];
+    return key === todayKey;
+  });
+
+  if(celebrants.length === 0){
+    panel.classList.remove('show');
+    strip.innerHTML = '';
+    return;
+  }
+  panel.classList.add('show');
+  strip.innerHTML = celebrants.map((m, i)=>{
+    const idx = members.indexOf(m);
+    const avatar = m.photo
+      ? `<img class="birthday-avatar" src="${m.photo}" alt="${escapeHtml(m.name)}">`
+      : `<div class="birthday-avatar-fallback" style="background:${colorFor(idx)}">${initials(m.name)}</div>`;
+    return `<div class="birthday-card">
+      <div class="birthday-avatar-wrap" style="background:${colorFor(idx)}22;">${avatar}</div>
+      <div class="birthday-name" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</div>
+      <div class="birthday-wish">🎂 Happy Birthday!</div>
+    </div>`;
+  }).join('');
+  document.getElementById('birthdayMessageDisplay').textContent = birthdayMessage || 'Wishing you a wonderful year ahead! 🎉';
+  document.getElementById('birthdayMessageInput').value = birthdayMessage;
+}
+
+/* ---------- upcoming birthdays popup (shows once per page load, 10 days out) ---------- */
+function computeUpcomingBirthdays(withinDays){
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const upcoming = [];
+  members.forEach(m=>{
+    if(!m.dob) return;
+    const parts = m.dob.split('-');
+    if(parts.length !== 3) return;
+    const mo = Number(parts[1]) - 1, d = Number(parts[2]);
+    let next = new Date(today.getFullYear(), mo, d);
+    if(next < today) next = new Date(today.getFullYear()+1, mo, d);
+    const daysAway = Math.round((next - today) / 86400000);
+    if(daysAway > 0 && daysAway <= withinDays){
+      upcoming.push({ m, daysAway, next });
+    }
+  });
+  upcoming.sort((a,b)=>a.daysAway - b.daysAway);
+  return upcoming;
+}
+function maybeShowUpcomingBirthdaysPopup(){
+  const upcoming = computeUpcomingBirthdays(10);
+  if(upcoming.length === 0) return;
+  const rows = upcoming.map(({m, daysAway, next})=>{
+    const idx = members.indexOf(m);
+    const avatar = m.photo
+      ? `<img class="member-card-avatar" style="width:40px;height:40px;" src="${m.photo}" alt="${escapeHtml(m.name)}">`
+      : `<div class="member-card-avatar-fallback" style="width:40px;height:40px;font-size:14px;background:${colorFor(idx)}">${initials(m.name)}</div>`;
+    const dateLabel = next.toLocaleDateString('default', {day:'numeric', month:'long'});
+    const dayWord = daysAway === 1 ? 'day' : 'days';
+    return `<div class="upcoming-bday-row">
+      ${avatar}
+      <div>
+        <div class="member-name">${escapeHtml(m.name)}</div>
+        <div class="member-sub">${dateLabel} · in ${daysAway} ${dayWord}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const overlay = openModal(`
+    <h3>🎂 Upcoming birthdays</h3>
+    <div class="upcoming-bday-list">${rows}</div>
+    <div class="modal-actions"><button class="btn btn-sm btn-primary" id="modalOk">Got it</button></div>
+  `, 'wide');
+  overlay.querySelector('#modalOk').addEventListener('click', ()=>overlay.remove());
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
+}
+
+document.getElementById('saveBirthdayMsgBtn').addEventListener('click', async ()=>{
+  if(!isAdmin) return;
+  birthdayMessage = document.getElementById('birthdayMessageInput').value.trim();
+  await storeSet('birthday-message', birthdayMessage);
+  document.getElementById('birthdayMessageDisplay').textContent = birthdayMessage || 'Wishing you a wonderful year ahead! 🎉';
+});
+
+/* ---------- member search ---------- */
+document.getElementById('memberSearchInput').addEventListener('input', (e)=>{
+  renderSearchResults(e.target.value.trim().toLowerCase());
+});
+function renderSearchResults(query){
+  const wrap = document.getElementById('memberSearchResults');
+  if(!query){ wrap.innerHTML = ''; return; }
+  const matches = getSortedMembers().filter(m=>
+    (m.name||'').toLowerCase().includes(query) ||
+    (m.phone||'').toLowerCase().includes(query) ||
+    (m.position||'').toLowerCase().includes(query)
+  );
+  if(matches.length === 0){ wrap.innerHTML = `<div class="split-empty">No members found.</div>`; return; }
+  wrap.innerHTML = matches.map(m=>{
+    const idx = members.indexOf(m);
+    const avatar = m.photo
+      ? `<img class="avatar" src="${m.photo}" style="border-color:${colorFor(idx)}" alt="${escapeHtml(m.name)}">`
+      : `<div class="avatar-fallback" style="background:${colorFor(idx)}">${initials(m.name)}</div>`;
+    return `<div class="search-result-row" data-search-member="${m.id}">${avatar}<div><div class="member-name">${escapeHtml(m.name)}</div>${m.position?`<div class="member-position">${escapeHtml(m.position)}</div>`:''}</div></div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-search-member]').forEach(row=>{
+    row.addEventListener('click', ()=>{
+      const m = members.find(x=>x.id===row.getAttribute('data-search-member'));
+      if(m) showMemberCard(m);
+    });
+  });
+}
+function showMemberCard(m){
+  const idx = members.indexOf(m);
+  const avatar = m.photo
+    ? `<img class="member-card-avatar" src="${m.photo}" alt="${escapeHtml(m.name)}">`
+    : `<div class="member-card-avatar-fallback" style="background:${colorFor(idx)}">${initials(m.name)}</div>`;
+  const rows = [
+    ['Phone', m.phone || '—'],
+    ['Address', m.address || '—'],
+    ['Parent / guardian', m.parentName || '—'],
+    ['Parent phone', m.parentPhone || '—'],
+    ['Education', m.education || '—'],
+    ['Status', m.status || '—'],
+    [m.status === 'Working' ? 'Workplace' : 'Institution', m.institution || '—'],
+    ['Date of birth', m.dob ? `${formatDob(m.dob)} (${calcAge(m.dob)} yrs)` : '—'],
+    ['Joined', m.joined || '—']
+  ];
+  const rowsHtml = rows.map(([k,v])=>`<tr><td class="mc-key">${k}</td><td class="mc-val">${escapeHtml(String(v))}</td></tr>`).join('');
+  const overlay = openModal(`
+    <div class="member-card-head">${avatar}<div><h3 style="margin-bottom:4px;">${escapeHtml(m.name)}</h3><div class="member-position">${escapeHtml(m.position || 'Member')}</div></div></div>
+    <table class="member-card-table">${rowsHtml}</table>
+    <div class="modal-actions" style="margin-top:16px;"><button class="btn btn-sm btn-primary" id="modalOk">Close</button></div>
+  `, 'wide');
+  overlay.querySelector('#modalOk').addEventListener('click', ()=>overlay.remove());
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
 }
 
 function renderStats(){
@@ -214,7 +403,8 @@ function renderMembersTable(){
     return;
   }
   const paidData = monthCache[currentMonth] || {};
-  let rows = members.map((m, idx)=>{
+  let rows = getSortedMembers().map((m)=>{
+    const idx = members.indexOf(m);
     const p = paidData[m.id] || { paid:false, amount:0 };
     const avatar = m.photo
       ? `<img class="avatar" src="${m.photo}" style="border-color:${colorFor(idx)}" alt="${m.name}">`
@@ -237,6 +427,7 @@ function renderMembersTable(){
     <tr class="detail-row" id="detail-${m.id}" style="display:none;"><td colspan="3">
       <div class="detail-grid">
         <div><div class="dlabel">Position</div><div class="dvalue">${escapeHtml(m.position)||'Member'}</div></div>
+        <div><div class="dlabel">Date of birth</div><div class="dvalue">${m.dob?`${formatDob(m.dob)} (${calcAge(m.dob)} yrs)`:'—'}</div></div>
         <div><div class="dlabel">Address</div><div class="dvalue">${escapeHtml(m.address)||'—'}</div></div>
         <div><div class="dlabel">Parent / guardian</div><div class="dvalue">${escapeHtml(m.parentName)||'—'}</div></div>
         <div><div class="dlabel">Parent phone</div><div class="dvalue">${escapeHtml(m.parentPhone)||'—'}</div></div>
@@ -352,7 +543,8 @@ async function renderMonthSlicer(){
 function renderSplitTables(){
   const paidData = monthCache[currentMonth] || {};
   const paidMembers = [], unpaidMembers = [];
-  members.forEach((m, idx)=>{
+  getSortedMembers().forEach((m)=>{
+    const idx = members.indexOf(m);
     const p = paidData[m.id];
     if(p && p.paid) paidMembers.push({m, idx, amount:p.amount});
     else unpaidMembers.push({m, idx});
@@ -457,6 +649,13 @@ document.getElementById('fStatus').addEventListener('change', (e)=>{
 document.getElementById('fPosition').addEventListener('change', (e)=>{
   document.getElementById('fPositionOtherWrap').style.display = e.target.value === '__other' ? 'block' : 'none';
 });
+function updateDobAgeHint(){
+  const val = document.getElementById('fDob').value;
+  const hint = document.getElementById('fDobAgeHint');
+  const age = calcAge(val);
+  hint.textContent = age !== null ? `Age: ${age} years` : '';
+}
+document.getElementById('fDob').addEventListener('input', updateDobAgeHint);
 
 /* ---------- new member photo ---------- */
 document.getElementById('newPhotoInput').addEventListener('change', (e)=>{
@@ -487,13 +686,14 @@ function resetMemberForm(){
   document.getElementById('memberFormTitle').textContent = 'Add a member';
   document.getElementById('saveMemberBtn').textContent = 'Add member';
   document.getElementById('cancelEditBtn').style.display = 'none';
-  ['fName','fPhone','fAddress','fParentName','fParentPhone','fEducation','fInstitution','fPositionOther'].forEach(id=>document.getElementById(id).value='');
+  ['fName','fPhone','fAddress','fParentName','fParentPhone','fEducation','fDob','fInstitution','fPositionOther'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('fStatus').value = 'Studying';
   document.getElementById('fInstLabel').textContent = 'School / college';
   document.getElementById('fPosition').value = '';
   document.getElementById('fPositionOtherWrap').style.display = 'none';
   document.getElementById('newPhotoPreview').src = '';
   newPhotoData = '';
+  updateDobAgeHint();
 }
 function startEditMember(m){
   editingMemberId = m.id;
@@ -506,10 +706,12 @@ function startEditMember(m){
   document.getElementById('fParentName').value = m.parentName||'';
   document.getElementById('fParentPhone').value = m.parentPhone||'';
   document.getElementById('fEducation').value = m.education||'';
+  document.getElementById('fDob').value = m.dob||'';
+  updateDobAgeHint();
   document.getElementById('fStatus').value = m.status||'Studying';
   document.getElementById('fInstLabel').textContent = m.status === 'Working' ? 'Workplace' : 'School / college';
   document.getElementById('fInstitution').value = m.institution||'';
-  const knownPositions = ['President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer'];
+  const knownPositions = ['President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer','Event Head'];
   if(m.position && !knownPositions.includes(m.position)){
     document.getElementById('fPosition').value = '__other';
     document.getElementById('fPositionOther').value = m.position;
@@ -536,6 +738,7 @@ document.getElementById('saveMemberBtn').addEventListener('click', async ()=>{
     parentName: document.getElementById('fParentName').value.trim(),
     parentPhone: document.getElementById('fParentPhone').value.trim(),
     education: document.getElementById('fEducation').value.trim(),
+    dob: document.getElementById('fDob').value,
     status: document.getElementById('fStatus').value,
     institution: document.getElementById('fInstitution').value.trim(),
     position: positionSelect === '__other' ? document.getElementById('fPositionOther').value.trim() : positionSelect,
