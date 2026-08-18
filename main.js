@@ -39,6 +39,11 @@ async function storeListPrefix(prefix){
     return snap.docs.map(d=>d.id).filter(id=>id.startsWith(prefix));
   }catch(e){ return []; }
 }
+async function storeDelete(key){
+  if(FIREBASE_NOT_CONFIGURED) return;
+  try{ await db.collection(COLLECTION).doc(key).delete(); }
+  catch(e){ console.error('storage delete failed', key, e); }
+}
 
 
 /* ---------- app state ---------- */
@@ -51,6 +56,11 @@ let currentMonth = new Date().toISOString().slice(0,7);
 let newPhotoData = '';
 let isAdmin = false;
 let birthdayMessage = '';
+let galleryPhotos = [];
+let newGalleryImages = [];
+let likedPhotoIds = new Set();
+let commenterMember = null; // {id, name} — picked from the member list, not free-typed
+let sliderIndex = new Map(); // photoId -> current slide index
 let editingMemberId = null;
 
 function fmtMoney(n){ n = Math.round(n||0); return '₹' + n.toLocaleString('en-IN'); }
@@ -63,14 +73,16 @@ function colorFor(idx){ return PALETTE[idx % PALETTE.length]; }
    3. Standard committee positions from the dropdown
    4. Plain "Member" (no position) — always last
 */
-const POSITIONS_ORDER = ['Founder/Treasurer','Founder/Adviser','Founder','President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer','Event Head'];
-
-function positionRank(pos) {
-  const p = (pos || '').trim();
-  if (p === '') return 1000;                     // Plain Member — always last
-  const idx = POSITIONS_ORDER.indexOf(p);
-  if (idx !== -1) return idx;                   // Defined positions (0 to 9)
-  return POSITIONS_ORDER.length;                // Custom/typed positions — right after defined list (10)
+const TOP_POSITIONS = ['Founder/Treasurer','Founder/Adviser','Founder','President','Vice President'];
+const STANDARD_POSITIONS = ['Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer'];
+function positionRank(pos){
+  const p = (pos||'').trim();
+  if(p === '') return 1000; // Member (no position) — always last
+  const topIdx = TOP_POSITIONS.indexOf(p);
+  if(topIdx !== -1) return topIdx; // 0–4
+  const stdIdx = STANDARD_POSITIONS.indexOf(p);
+  if(stdIdx !== -1) return 100 + stdIdx; // 100–104
+  return 50; // any custom/typed-in position — falls right after the top 5
 }
 function getSortedMembers(){
   return [...members].sort((a,b)=>{
@@ -80,6 +92,13 @@ function getSortedMembers(){
   });
 }
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+/* ---------- comment moderation ---------- */
+const BLOCKED_WORDS = ['fuck','shit','bitch','asshole','bastard','dick','pussy','cunt','slut','whore','fucker','motherfucker','nigger','faggot','retard','rape'];
+function containsProfanity(text){
+  const clean = (text||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ');
+  return BLOCKED_WORDS.some(word=> new RegExp('\\b'+word+'\\b').test(clean));
+}
+
 function formatDob(dob){
   const parts = dob.split('-');
   if(parts.length !== 3) return dob;
@@ -187,8 +206,20 @@ async function loadAll(){
   document.getElementById('monthPicker').value = currentMonth;
   await ensureMonthLoaded(currentMonth);
   await ensureAllMonthsLoaded();
+  await loadGallery();
   render();
   maybeShowUpcomingBirthdaysPopup();
+}
+async function loadGallery(){
+  const keys = await storeListPrefix('gallery:');
+  const photos = [];
+  for(const key of keys){
+    const p = await storeGet(key, null);
+    if(p) photos.push(p);
+  }
+  photos.sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  galleryPhotos = photos;
+  renderGallery();
 }
 async function ensureMonthLoaded(month){
   if(monthCache[month]) return monthCache[month];
@@ -711,7 +742,7 @@ function startEditMember(m){
   document.getElementById('fStatus').value = m.status||'Studying';
   document.getElementById('fInstLabel').textContent = m.status === 'Working' ? 'Workplace' : 'School / college';
   document.getElementById('fInstitution').value = m.institution||'';
-  const knownPositions = ['President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer','Event Head'];
+  const knownPositions = ['President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer'];
   if(m.position && !knownPositions.includes(m.position)){
     document.getElementById('fPosition').value = '__other';
     document.getElementById('fPositionOther').value = m.position;
@@ -807,6 +838,284 @@ document.getElementById('changePinBtn').addEventListener('click', async ()=>{
   document.getElementById('newPinInput').value = '';
   showMessage('Admin PIN updated.');
 });
+
+/* ---------- gallery ---------- */
+document.getElementById('galleryPhotoInput').addEventListener('change', (e)=>{
+  const files = Array.from(e.target.files || []);
+  if(files.length === 0) return;
+  files.forEach(file=>{
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        // Compress: cap the longer side at 1100px and re-encode as JPEG.
+        // Keeps photos sharp on screen while staying well under storage limits.
+        const maxDim = 1100;
+        let w = img.width, h = img.height;
+        if(w > maxDim || h > maxDim){
+          if(w >= h){ h = Math.round(h * (maxDim / w)); w = maxDim; }
+          else { w = Math.round(w * (maxDim / h)); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        newGalleryImages.push(canvas.toDataURL('image/jpeg', 0.82));
+        renderGalleryUploadPreview();
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+  e.target.value = ''; // lets them pick more photos afterwards, including the same files again
+});
+
+function renderGalleryUploadPreview(){
+  const wrap = document.getElementById('galleryUploadPreview');
+  if(!wrap) return;
+  if(newGalleryImages.length === 0){ wrap.innerHTML = ''; return; }
+  wrap.innerHTML = newGalleryImages.map((src,i)=>`
+    <div class="upload-thumb">
+      <img src="${src}" alt="Selected photo ${i+1}">
+      <button type="button" class="upload-thumb-remove" data-remove-thumb="${i}">×</button>
+    </div>`).join('');
+  wrap.querySelectorAll('[data-remove-thumb]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      newGalleryImages.splice(Number(btn.getAttribute('data-remove-thumb')), 1);
+      renderGalleryUploadPreview();
+    });
+  });
+}
+
+document.getElementById('uploadGalleryBtn').addEventListener('click', async ()=>{
+  if(!isAdmin) return;
+  if(newGalleryImages.length === 0){ showMessage('Choose at least one photo first.'); return; }
+  const caption = document.getElementById('galleryCaptionInput').value.trim();
+  const takenAt = document.getElementById('galleryDateInput').value || null;
+  const id = 'g_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  const photo = { id, images: [...newGalleryImages], caption, takenAt, uploadedAt: new Date().toISOString(), likes: 0, comments: [] };
+  await storeSet('gallery:' + id, photo);
+  galleryPhotos.unshift(photo);
+  document.getElementById('galleryCaptionInput').value = '';
+  document.getElementById('galleryDateInput').value = '';
+  newGalleryImages = [];
+  renderGalleryUploadPreview();
+  renderGallery();
+});
+
+function photoImages(p){
+  return p.images && p.images.length ? p.images : (p.image ? [p.image] : []);
+}
+
+function renderGallery(){
+  const grid = document.getElementById('galleryGrid');
+  if(!grid) return;
+  if(galleryPhotos.length === 0){
+    grid.innerHTML = `<div class="empty"><div class="big">📷</div>${isAdmin ? 'Upload your first photo above.' : 'No photos yet.'}</div>`;
+    return;
+  }
+  grid.innerHTML = `<div class="gallery-grid">${galleryPhotos.map(p=>{
+    const liked = likedPhotoIds.has(p.id);
+    const dateLabel = p.takenAt
+      ? formatDob(p.takenAt)
+      : new Date(p.uploadedAt).toLocaleDateString('default', {day:'numeric', month:'short', year:'numeric'});
+    const dateCaption = p.takenAt ? `Taken ${dateLabel}` : `Uploaded ${dateLabel}`;
+    const comments = p.comments || [];
+    const commentsHtml = comments.length
+      ? comments.map(c=>`<div class="gallery-comment"><strong>${escapeHtml(c.author||'Member')}:</strong> ${escapeHtml(c.text)}</div>`).join('')
+      : `<div class="gallery-comment-empty">No comments yet.</div>`;
+    const images = photoImages(p);
+    const curIdx = sliderIndex.get(p.id) || 0;
+    const sliderHtml = `<div class="gallery-slider">
+      <div class="gallery-slider-track" id="sliderTrack-${p.id}" style="transform:translateX(-${curIdx*100}%);">
+        ${images.map(src=>`<img class="gallery-img" src="${src}" alt="${escapeHtml(p.caption||'Gallery photo')}">`).join('')}
+      </div>
+      ${images.length > 1 ? `
+        <button type="button" class="slider-arrow prev" data-slider-prev="${p.id}">‹</button>
+        <button type="button" class="slider-arrow next" data-slider-next="${p.id}">›</button>
+        <div class="slider-dots">${images.map((_,i)=>`<span class="slider-dot ${i===curIdx?'active':''}" data-dot="${p.id}:${i}"></span>`).join('')}</div>
+      ` : ''}
+    </div>`;
+    const commentingAs = commenterMember
+      ? `<div class="commenting-as">Commenting as <strong>${escapeHtml(commenterMember.name)}</strong> · <button type="button" class="link-btn" data-change-commenter>not you?</button></div>`
+      : '';
+    return `<div class="gallery-card">
+      ${sliderHtml}
+      <div class="gallery-body">
+        ${p.caption ? `<div class="gallery-caption">${escapeHtml(p.caption)}</div>` : ''}
+        <div class="gallery-date">${dateCaption}</div>
+        <div class="gallery-actions">
+          <button class="gallery-action-btn ${liked?'liked':''}" data-like="${p.id}">${liked?'❤️':'🤍'} <span>${p.likes||0}</span></button>
+          <button class="gallery-action-btn" data-comment-toggle="${p.id}">💬 <span>${comments.length}</span></button>
+          <button class="gallery-action-btn" data-share="${p.id}">↗ Share</button>
+          <button class="gallery-action-btn danger admin-only" data-gallery-remove="${p.id}">🗑</button>
+        </div>
+        <div class="gallery-comments" id="comments-${p.id}" style="display:none;">
+          <div class="gallery-comment-list">${commentsHtml}</div>
+          ${commentingAs}
+          <div class="gallery-comment-input-row">
+            <input type="text" placeholder="Add a comment..." id="commentInput-${p.id}">
+            <button class="btn btn-sm" data-comment-send="${p.id}">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  grid.querySelectorAll('[data-like]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const id = btn.getAttribute('data-like');
+      const photo = galleryPhotos.find(x=>x.id===id);
+      if(!photo) return;
+      if(likedPhotoIds.has(id)){ likedPhotoIds.delete(id); photo.likes = Math.max(0, (photo.likes||0)-1); }
+      else { likedPhotoIds.add(id); photo.likes = (photo.likes||0)+1; }
+      await storeSet('gallery:'+id, photo);
+      renderGallery();
+    });
+  });
+  grid.querySelectorAll('[data-comment-toggle]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const el = document.getElementById('comments-'+btn.getAttribute('data-comment-toggle'));
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    });
+  });
+  grid.querySelectorAll('[data-comment-send]').forEach(btn=>{
+    btn.addEventListener('click', ()=>submitComment(btn.getAttribute('data-comment-send')));
+  });
+  grid.querySelectorAll('[id^="commentInput-"]').forEach(input=>{
+    input.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') submitComment(input.id.replace('commentInput-','')); });
+  });
+  grid.querySelectorAll('[data-change-commenter]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const picked = await pickCommenterMember();
+      if(picked) commenterMember = picked;
+      renderGallery();
+    });
+  });
+  grid.querySelectorAll('[data-share]').forEach(btn=>{
+    btn.addEventListener('click', ()=>sharePhoto(btn.getAttribute('data-share')));
+  });
+  grid.querySelectorAll('[data-gallery-remove]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(!isAdmin) return;
+      const id = btn.getAttribute('data-gallery-remove');
+      const ok = await askConfirm('Remove this photo? This can\'t be undone.', 'Remove');
+      if(!ok) return;
+      await storeDelete('gallery:'+id);
+      galleryPhotos = galleryPhotos.filter(p=>p.id!==id);
+      sliderIndex.delete(id);
+      renderGallery();
+    });
+  });
+  grid.querySelectorAll('[data-slider-prev]').forEach(btn=>{
+    btn.addEventListener('click', ()=>stepSlider(btn.getAttribute('data-slider-prev'), -1));
+  });
+  grid.querySelectorAll('[data-slider-next]').forEach(btn=>{
+    btn.addEventListener('click', ()=>stepSlider(btn.getAttribute('data-slider-next'), 1));
+  });
+  grid.querySelectorAll('[data-dot]').forEach(dot=>{
+    dot.addEventListener('click', ()=>{
+      const [id, i] = dot.getAttribute('data-dot').split(':');
+      sliderIndex.set(id, Number(i));
+      updateSliderPosition(id);
+    });
+  });
+}
+
+function stepSlider(id, delta){
+  const photo = galleryPhotos.find(x=>x.id===id);
+  if(!photo) return;
+  const images = photoImages(photo);
+  let idx = sliderIndex.get(id) || 0;
+  idx = (idx + delta + images.length) % images.length;
+  sliderIndex.set(id, idx);
+  updateSliderPosition(id);
+}
+function updateSliderPosition(id){
+  const track = document.getElementById('sliderTrack-'+id);
+  const idx = sliderIndex.get(id) || 0;
+  if(track) track.style.transform = `translateX(-${idx*100}%)`;
+  document.querySelectorAll(`[data-dot^="${id}:"]`).forEach(d=>{
+    const i = Number(d.getAttribute('data-dot').split(':')[1]);
+    d.classList.toggle('active', i === idx);
+  });
+}
+
+/* ---------- comment identity: pick from members, never free-typed ---------- */
+function pickCommenterMember(){
+  return new Promise(resolve=>{
+    const overlay = openModal(`
+      <h3>Who are you?</h3>
+      <input type="text" id="commenterSearchInput" placeholder="Search your name...">
+      <div id="commenterSearchResults" style="max-height:260px; overflow-y:auto; margin:10px 0 4px;"></div>
+      <div class="modal-actions"><button class="btn btn-sm" id="modalCancel">Cancel</button></div>
+    `, 'wide');
+    const input = overlay.querySelector('#commenterSearchInput');
+    const resultsWrap = overlay.querySelector('#commenterSearchResults');
+    const cleanup = (val)=>{ overlay.remove(); resolve(val); };
+
+    function renderResults(query){
+      const q = (query||'').toLowerCase();
+      const list = q ? getSortedMembers().filter(m=>(m.name||'').toLowerCase().includes(q)) : getSortedMembers();
+      if(list.length === 0){ resultsWrap.innerHTML = `<div class="split-empty">No members found.</div>`; return; }
+      resultsWrap.innerHTML = list.map(m=>{
+        const idx = members.indexOf(m);
+        const avatar = m.photo
+          ? `<img class="avatar" src="${m.photo}" style="border-color:${colorFor(idx)}" alt="${escapeHtml(m.name)}">`
+          : `<div class="avatar-fallback" style="background:${colorFor(idx)}">${initials(m.name)}</div>`;
+        return `<div class="search-result-row" data-pick-member="${m.id}">${avatar}<div><div class="member-name">${escapeHtml(m.name)}</div>${m.position?`<div class="member-position">${escapeHtml(m.position)}</div>`:''}</div></div>`;
+      }).join('');
+      resultsWrap.querySelectorAll('[data-pick-member]').forEach(row=>{
+        row.addEventListener('click', ()=>{
+          const m = members.find(x=>x.id===row.getAttribute('data-pick-member'));
+          cleanup(m ? {id:m.id, name:m.name} : null);
+        });
+      });
+    }
+    renderResults('');
+    input.addEventListener('input', ()=>renderResults(input.value.trim()));
+    setTimeout(()=>input.focus(), 30);
+    overlay.querySelector('#modalCancel').addEventListener('click', ()=>cleanup(null));
+    overlay.addEventListener('click', (e)=>{ if(e.target===overlay) cleanup(null); });
+  });
+}
+
+async function submitComment(id){
+  const input = document.getElementById('commentInput-'+id);
+  const text = input.value.trim();
+  if(!text) return;
+  if(containsProfanity(text)){
+    showMessage('That comment contains language that isn\'t allowed here — please rephrase it.');
+    return;
+  }
+  if(!commenterMember){
+    const picked = await pickCommenterMember();
+    if(!picked) return;
+    commenterMember = picked;
+  }
+  const photo = galleryPhotos.find(x=>x.id===id);
+  if(!photo) return;
+  photo.comments = photo.comments || [];
+  photo.comments.push({ authorId: commenterMember.id, author: commenterMember.name, text, at: new Date().toISOString() });
+  await storeSet('gallery:'+id, photo);
+  renderGallery();
+  const el = document.getElementById('comments-'+id);
+  if(el) el.style.display = 'block';
+}
+
+function sharePhoto(id){
+  const photo = galleryPhotos.find(x=>x.id===id);
+  if(!photo) return;
+  const shareText = photo.caption || 'Check out this photo from Brights Youth Community!';
+  if(navigator.share){
+    navigator.share({ title:'Brights Youth Community', text: shareText, url: window.location.href }).catch(()=>{});
+  } else if(navigator.clipboard){
+    navigator.clipboard.writeText(shareText + ' — ' + window.location.href)
+      .then(()=>showMessage('Link copied! Paste it anywhere to share.'))
+      .catch(()=>showMessage('Could not copy the link automatically.'));
+  } else {
+    showMessage('Sharing is not supported on this browser.');
+  }
+}
 
 /* ---------- init ---------- */
 setAdminUi();
