@@ -742,7 +742,7 @@ function startEditMember(m){
   document.getElementById('fStatus').value = m.status||'Studying';
   document.getElementById('fInstLabel').textContent = m.status === 'Working' ? 'Workplace' : 'School / college';
   document.getElementById('fInstitution').value = m.institution||'';
-  const knownPositions = ['President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer'];
+  const knownPositions = ['President','Vice President','Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer','Event Head'];
   if(m.position && !knownPositions.includes(m.position)){
     document.getElementById('fPosition').value = '__other';
     document.getElementById('fPositionOther').value = m.position;
