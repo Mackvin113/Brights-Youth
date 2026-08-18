@@ -28,7 +28,8 @@
     <div class="tabs" id="tabs">
       <button class="tab-btn active" data-tab="overview">Overview</button>
       <button class="tab-btn" data-tab="members">Members</button>
-      <button class="tab-btn" data-tab="fund">Fund log</button>
+      <button class="tab-btn" data-tab="fund">Transaction</button>
+      <button class="tab-btn" data-tab="gallery">Gallery</button>
       <button class="tab-btn admin-only" data-tab="settings">Settings</button>
     </div>
     <div class="admin-zone">
@@ -136,7 +137,6 @@
             <option value="Treasurer">Treasurer</option>
             <option value="Coordinator">Coordinator</option>
             <option value="Volunteer">Volunteer</option>
-            <option value="Event Head">Event Head</option>
             <option value="__other">Other (type below)</option>
           </select>
         </div>
@@ -178,6 +178,22 @@
       <div class="panel-head"><div><h2>Transaction history</h2><div class="sub">All fund movements outside membership fees</div></div></div>
       <div class="view-only-note">Viewing only — log in as admin to add or remove transactions.</div>
       <div id="txnTableWrap"></div>
+    </div>
+  </div>
+
+  <!-- ================= GALLERY ================= -->
+  <div class="section" id="section-gallery">
+    <div class="panel admin-only">
+      <div class="panel-head"><div><h2>Upload photos</h2><div class="sub">Add one photo or a whole set from an event — they'll show as a slider on one card. Photos are compressed automatically to load fast without losing clarity.</div></div></div>
+      <button class="btn btn-sm file-btn">Choose photos<input type="file" id="galleryPhotoInput" accept="image/*" multiple></button>
+      <div class="gallery-upload-preview" id="galleryUploadPreview"></div>
+      <div class="field" style="margin-top:14px;"><label>Caption</label><input type="text" id="galleryCaptionInput" placeholder="What's happening in these photos?"></div>
+      <div class="field"><label>Date taken</label><input type="date" id="galleryDateInput"></div>
+      <button class="btn btn-primary" id="uploadGalleryBtn">Upload</button>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>Gallery</h2><div class="sub">Moments from the community</div></div></div>
+      <div id="galleryGrid"></div>
     </div>
   </div>
 
