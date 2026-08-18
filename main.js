@@ -73,7 +73,7 @@ function colorFor(idx){ return PALETTE[idx % PALETTE.length]; }
    3. Standard committee positions from the dropdown
    4. Plain "Member" (no position) — always last
 */
-const TOP_POSITIONS = ['Founder/Treasurer','Founder/Adviser','Founder','President','Vice President'];
+const TOP_POSITIONS = ['Founder/Treasurer','Founder/Adviser','Founder','President','Vice President','Event Head'];
 const STANDARD_POSITIONS = ['Secretary','Joint Secretary','Treasurer','Coordinator','Volunteer'];
 function positionRank(pos){
   const p = (pos||'').trim();
