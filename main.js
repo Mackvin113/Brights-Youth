@@ -840,17 +840,16 @@ document.getElementById('changePinBtn').addEventListener('click', async ()=>{
 });
 
 /* ---------- gallery ---------- */
-document.getElementById('galleryPhotoInput').addEventListener('change', (e)=>{
-  const files = Array.from(e.target.files || []);
-  if(files.length === 0) return;
-  files.forEach(file=>{
+function compressImageFile(file, maxDim, quality){
+  maxDim = maxDim || 1100;
+  quality = quality || 0.82;
+  // Caps the longer side and re-encodes as JPEG — keeps photos sharp on
+  // screen while staying well under storage limits.
+  return new Promise((resolve, reject)=>{
     const reader = new FileReader();
     reader.onload = (ev)=>{
       const img = new Image();
       img.onload = ()=>{
-        // Compress: cap the longer side at 1100px and re-encode as JPEG.
-        // Keeps photos sharp on screen while staying well under storage limits.
-        const maxDim = 1100;
         let w = img.width, h = img.height;
         if(w > maxDim || h > maxDim){
           if(w >= h){ h = Math.round(h * (maxDim / w)); w = maxDim; }
@@ -859,13 +858,26 @@ document.getElementById('galleryPhotoInput').addEventListener('change', (e)=>{
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        newGalleryImages.push(canvas.toDataURL('image/jpeg', 0.82));
-        renderGalleryUploadPreview();
+        resolve(canvas.toDataURL('image/jpeg', quality));
       };
+      img.onerror = reject;
       img.src = ev.target.result;
     };
+    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+document.getElementById('galleryPhotoInput').addEventListener('change', async (e)=>{
+  const files = Array.from(e.target.files || []);
+  if(files.length === 0) return;
+  for(const file of files){
+    try{
+      const dataUrl = await compressImageFile(file);
+      newGalleryImages.push(dataUrl);
+      renderGalleryUploadPreview();
+    }catch(err){ console.error('image compression failed', err); }
+  }
   e.target.value = ''; // lets them pick more photos afterwards, including the same files again
 });
 
@@ -947,6 +959,7 @@ function renderGallery(){
           <button class="gallery-action-btn ${liked?'liked':''}" data-like="${p.id}">${liked?'❤️':'🤍'} <span>${p.likes||0}</span></button>
           <button class="gallery-action-btn" data-comment-toggle="${p.id}">💬 <span>${comments.length}</span></button>
           <button class="gallery-action-btn" data-share="${p.id}">↗ Share</button>
+          <button class="gallery-action-btn admin-only" data-gallery-edit="${p.id}">✏️ Edit</button>
           <button class="gallery-action-btn danger admin-only" data-gallery-remove="${p.id}">🗑</button>
         </div>
         <div class="gallery-comments" id="comments-${p.id}" style="display:none;">
@@ -994,6 +1007,9 @@ function renderGallery(){
   grid.querySelectorAll('[data-share]').forEach(btn=>{
     btn.addEventListener('click', ()=>sharePhoto(btn.getAttribute('data-share')));
   });
+  grid.querySelectorAll('[data-gallery-edit]').forEach(btn=>{
+    btn.addEventListener('click', ()=>editGalleryPost(btn.getAttribute('data-gallery-edit')));
+  });
   grid.querySelectorAll('[data-gallery-remove]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       if(!isAdmin) return;
@@ -1018,6 +1034,65 @@ function renderGallery(){
       sliderIndex.set(id, Number(i));
       updateSliderPosition(id);
     });
+  });
+}
+
+async function editGalleryPost(id){
+  if(!isAdmin) return;
+  const photo = galleryPhotos.find(x=>x.id===id);
+  if(!photo) return;
+  let editImages = [...photoImages(photo)];
+
+  const overlay = openModal(`
+    <h3>Edit post</h3>
+    <div class="gallery-upload-preview" id="editGalleryPreview"></div>
+    <button type="button" class="btn btn-sm file-btn" style="margin-top:10px;">Add more photos<input type="file" id="editGalleryFileInput" accept="image/*" multiple></button>
+    <div class="field" style="margin-top:14px;"><label>Caption</label><input type="text" id="editGalleryCaption" value="${escapeHtml(photo.caption||'')}"></div>
+    <div class="field"><label>Date taken</label><input type="date" id="editGalleryDate" value="${photo.takenAt||''}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm" id="modalCancel">Cancel</button>
+      <button class="btn btn-sm btn-primary" id="modalSave">Save changes</button>
+    </div>
+  `, 'wide');
+
+  function renderEditPreview(){
+    const wrap = overlay.querySelector('#editGalleryPreview');
+    wrap.innerHTML = editImages.map((src,i)=>`
+      <div class="upload-thumb">
+        <img src="${src}" alt="Photo ${i+1}">
+        <button type="button" class="upload-thumb-remove" data-edit-remove-thumb="${i}">×</button>
+      </div>`).join('');
+    wrap.querySelectorAll('[data-edit-remove-thumb]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        editImages.splice(Number(btn.getAttribute('data-edit-remove-thumb')), 1);
+        renderEditPreview();
+      });
+    });
+  }
+  renderEditPreview();
+
+  overlay.querySelector('#editGalleryFileInput').addEventListener('change', async (e)=>{
+    const files = Array.from(e.target.files || []);
+    for(const file of files){
+      try{ editImages.push(await compressImageFile(file)); }
+      catch(err){ console.error('image compression failed', err); }
+    }
+    renderEditPreview();
+    e.target.value = '';
+  });
+
+  overlay.querySelector('#modalCancel').addEventListener('click', ()=>overlay.remove());
+  overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
+  overlay.querySelector('#modalSave').addEventListener('click', async ()=>{
+    if(editImages.length === 0){ showMessage('A post needs at least one photo.'); return; }
+    photo.images = [...editImages];
+    if(photo.image) delete photo.image; // clean up legacy single-image field if present
+    photo.caption = overlay.querySelector('#editGalleryCaption').value.trim();
+    photo.takenAt = overlay.querySelector('#editGalleryDate').value || null;
+    await storeSet('gallery:' + id, photo);
+    sliderIndex.set(id, 0);
+    overlay.remove();
+    renderGallery();
   });
 }
 
