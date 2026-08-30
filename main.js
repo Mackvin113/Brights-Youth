@@ -28,9 +28,9 @@ async function storeGet(key, fallback){
   }catch(e){ console.error('storage get failed', key, e); return fallback; }
 }
 async function storeSet(key, value){
-  if(FIREBASE_NOT_CONFIGURED) return;
-  try{ await db.collection(COLLECTION).doc(key).set({ value: JSON.stringify(value) }); }
-  catch(e){ console.error('storage set failed', key, e); }
+  if(FIREBASE_NOT_CONFIGURED) return false;
+  try{ await db.collection(COLLECTION).doc(key).set({ value: JSON.stringify(value) }); return true; }
+  catch(e){ console.error('storage set failed', key, e); return false; }
 }
 async function storeListPrefix(prefix){
   if(FIREBASE_NOT_CONFIGURED) return [];
@@ -197,7 +197,7 @@ document.getElementById('adminLogoutBtn').addEventListener('click', ()=>{
 
 /* ---------- data load ---------- */
 async function loadAll(){
-  members = await storeGet('members', []);
+  members = await loadMembers();
   settings = await storeGet('settings', { monthlyFee: 200, openingBalance: 0 });
   transactions = await storeGet('transactions', []);
   birthdayMessage = await storeGet('birthday-message', '');
@@ -210,16 +210,71 @@ async function loadAll(){
   render();
   maybeShowUpcomingBirthdaysPopup();
 }
+async function loadMembers(){
+  // Each member is stored as its own document (member:<id>) so the member
+  // list can never hit Firestore's 1MB-per-document limit as the community
+  // grows or people add profile photos — previously ALL members shared one
+  // document, so adding one member with a photo could push that single
+  // document over the limit and silently fail to save, which is what broke
+  // the member list.
+  const keys = await storeListPrefix('member:');
+  if(keys.length > 0){
+    const loaded = [];
+    for(const key of keys){
+      const m = await storeGet(key, null);
+      if(m) loaded.push(m);
+    }
+    return loaded;
+  }
+  // Nothing in the new format yet — check for data saved in the old bundled
+  // 'members' document and migrate it automatically, one document per member.
+  const legacy = await storeGet('members', []);
+  if(legacy.length > 0){
+    for(const m of legacy){ await storeSet('member:' + m.id, m); }
+  }
+  return legacy;
+}
 async function loadGallery(){
   const keys = await storeListPrefix('gallery:');
   const photos = [];
   for(const key of keys){
     const p = await storeGet(key, null);
-    if(p) photos.push(p);
+    if(!p) continue;
+    p.images = await loadPhotoImages(p.id, p);
+    photos.push(p);
   }
   photos.sort((a,b)=> new Date(b.uploadedAt) - new Date(a.uploadedAt));
   galleryPhotos = photos;
   renderGallery();
+}
+async function loadPhotoImages(photoId, legacyPhoto){
+  // Each image is stored as its own document (gallery-img:<photoId>:<index>)
+  // so a post with several photos never hits Firestore's 1MB-per-document limit.
+  const imgKeys = await storeListPrefix('gallery-img:' + photoId + ':');
+  if(imgKeys.length === 0){
+    // Falls back to the old bundled format for posts uploaded before this fix.
+    return (legacyPhoto && legacyPhoto.images && legacyPhoto.images.length) ? legacyPhoto.images
+      : (legacyPhoto && legacyPhoto.image ? [legacyPhoto.image] : []);
+  }
+  imgKeys.sort((a,b)=> Number(a.split(':').pop()) - Number(b.split(':').pop()));
+  const images = [];
+  for(const key of imgKeys){
+    const img = await storeGet(key, null);
+    if(img) images.push(img);
+  }
+  return images;
+}
+async function savePhotoImages(photoId, images){
+  // Wipes any existing per-image documents for this post, then writes the
+  // current set fresh — keeps things in sync after edits (add/remove photos).
+  const oldKeys = await storeListPrefix('gallery-img:' + photoId + ':');
+  for(const key of oldKeys){ await storeDelete(key); }
+  let ok = true;
+  for(let i=0; i<images.length; i++){
+    const success = await storeSet('gallery-img:' + photoId + ':' + i, images[i]);
+    if(!success) ok = false;
+  }
+  return ok;
 }
 async function ensureMonthLoaded(month){
   if(monthCache[month]) return monthCache[month];
@@ -510,7 +565,7 @@ function renderMembersTable(){
       const ok = await askConfirm('Remove this member? Their payment history will stay in past months.', 'Remove');
       if(!ok) return;
       members = members.filter(m=>m.id!==id);
-      await storeSet('members', members);
+      await storeDelete('member:' + id);
       render();
     });
   });
@@ -775,13 +830,24 @@ document.getElementById('saveMemberBtn').addEventListener('click', async ()=>{
     position: positionSelect === '__other' ? document.getElementById('fPositionOther').value.trim() : positionSelect,
     photo: newPhotoData
   };
+  let savedMember;
   if(editingMemberId){
     const idx = members.findIndex(m=>m.id===editingMemberId);
     if(idx>-1) members[idx] = { ...members[idx], ...fields };
+    savedMember = members[idx];
   } else {
-    members.push({ id:'m_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), joined:new Date().toISOString().slice(0,10), ...fields });
+    savedMember = { id:'m_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), joined:new Date().toISOString().slice(0,10), ...fields };
+    members.push(savedMember);
   }
-  await storeSet('members', members);
+  const btn = document.getElementById('saveMemberBtn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Saving...';
+  const ok = await storeSet('member:' + savedMember.id, savedMember);
+  btn.disabled = false; btn.textContent = originalLabel;
+  if(!ok){
+    showMessage('Couldn\'t save this member — check your internet connection and try again.');
+    return;
+  }
   resetMemberForm();
   render();
 });
@@ -901,11 +967,20 @@ function renderGalleryUploadPreview(){
 document.getElementById('uploadGalleryBtn').addEventListener('click', async ()=>{
   if(!isAdmin) return;
   if(newGalleryImages.length === 0){ showMessage('Choose at least one photo first.'); return; }
+  const btn = document.getElementById('uploadGalleryBtn');
+  btn.disabled = true; btn.textContent = 'Uploading...';
   const caption = document.getElementById('galleryCaptionInput').value.trim();
   const takenAt = document.getElementById('galleryDateInput').value || null;
   const id = 'g_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
-  const photo = { id, images: [...newGalleryImages], caption, takenAt, uploadedAt: new Date().toISOString(), likes: 0, comments: [] };
-  await storeSet('gallery:' + id, photo);
+  const imagesOk = await savePhotoImages(id, newGalleryImages);
+  const photo = { id, caption, takenAt, uploadedAt: new Date().toISOString(), likes: 0, comments: [] };
+  const metaOk = await storeSet('gallery:' + id, photo);
+  btn.disabled = false; btn.textContent = 'Upload';
+  if(!imagesOk || !metaOk){
+    showMessage('Upload failed — check your internet connection and try again with fewer photos.');
+    return;
+  }
+  photo.images = [...newGalleryImages];
   galleryPhotos.unshift(photo);
   document.getElementById('galleryCaptionInput').value = '';
   document.getElementById('galleryDateInput').value = '';
@@ -1016,6 +1091,8 @@ function renderGallery(){
       const id = btn.getAttribute('data-gallery-remove');
       const ok = await askConfirm('Remove this photo? This can\'t be undone.', 'Remove');
       if(!ok) return;
+      const imgKeys = await storeListPrefix('gallery-img:' + id + ':');
+      for(const key of imgKeys){ await storeDelete(key); }
       await storeDelete('gallery:'+id);
       galleryPhotos = galleryPhotos.filter(p=>p.id!==id);
       sliderIndex.delete(id);
@@ -1085,11 +1162,25 @@ async function editGalleryPost(id){
   overlay.addEventListener('click', (e)=>{ if(e.target===overlay) overlay.remove(); });
   overlay.querySelector('#modalSave').addEventListener('click', async ()=>{
     if(editImages.length === 0){ showMessage('A post needs at least one photo.'); return; }
+    const saveBtn = overlay.querySelector('#modalSave');
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+    const imagesOk = await savePhotoImages(id, editImages);
+    const metaToSave = {
+      id: photo.id,
+      caption: overlay.querySelector('#editGalleryCaption').value.trim(),
+      takenAt: overlay.querySelector('#editGalleryDate').value || null,
+      uploadedAt: photo.uploadedAt,
+      likes: photo.likes || 0,
+      comments: photo.comments || []
+    };
+    const metaOk = await storeSet('gallery:' + id, metaToSave);
+    saveBtn.disabled = false; saveBtn.textContent = 'Save changes';
+    if(!imagesOk || !metaOk){
+      showMessage('Save failed — check your internet connection and try again with fewer photos.');
+      return;
+    }
+    Object.assign(photo, metaToSave);
     photo.images = [...editImages];
-    if(photo.image) delete photo.image; // clean up legacy single-image field if present
-    photo.caption = overlay.querySelector('#editGalleryCaption').value.trim();
-    photo.takenAt = overlay.querySelector('#editGalleryDate').value || null;
-    await storeSet('gallery:' + id, photo);
     sliderIndex.set(id, 0);
     overlay.remove();
     renderGallery();
@@ -1191,6 +1282,31 @@ function sharePhoto(id){
     showMessage('Sharing is not supported on this browser.');
   }
 }
+
+/* ---------- installable app (PWA) ---------- */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('./sw.js').catch(err=>console.error('SW registration failed', err));
+  });
+}
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = document.getElementById('installAppBtn');
+  if(btn) btn.style.display = 'inline-flex';
+});
+document.getElementById('installAppBtn').addEventListener('click', async ()=>{
+  if(!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById('installAppBtn').style.display = 'none';
+});
+window.addEventListener('appinstalled', ()=>{
+  const btn = document.getElementById('installAppBtn');
+  if(btn) btn.style.display = 'none';
+});
 
 /* ---------- init ---------- */
 setAdminUi();
