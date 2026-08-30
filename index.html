@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Brights Youth Community — Fund Dashboard</title>
 <link rel="icon" type="image/jpeg" href="./logo.jpg">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#20222B">
+<link rel="apple-touch-icon" href="./icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
@@ -33,6 +36,7 @@
       <button class="tab-btn admin-only" data-tab="settings">Settings</button>
     </div>
     <div class="admin-zone">
+      <button class="btn btn-sm" id="installAppBtn" style="display:none;">📲 Install app</button>
       <span class="admin-pill off" id="adminPill">Viewing only</span>
       <button class="btn btn-sm" id="adminLoginBtn">Admin login</button>
       <button class="btn btn-sm admin-only" id="adminLogoutBtn">Log out</button>
