@@ -302,6 +302,7 @@ async function render(){
   await renderMonthSlicer();
   renderSplitTables();
   renderBirthdays();
+  renderDirectory();
 }
 
 function renderBirthdays(){
@@ -420,6 +421,50 @@ function renderSearchResults(query){
     });
   });
 }
+
+/* ---------- Member directory tab: browse-only, no payment data ---------- */
+let directoryQuery = '';
+document.getElementById('directorySearchInput').addEventListener('input', (e)=>{
+  directoryQuery = e.target.value.trim().toLowerCase();
+  renderDirectory();
+});
+function renderDirectory(){
+  const grid = document.getElementById('directoryGrid');
+  if(!grid) return;
+  const list = directoryQuery
+    ? getSortedMembers().filter(m=>
+        (m.name||'').toLowerCase().includes(directoryQuery) ||
+        (m.phone||'').toLowerCase().includes(directoryQuery) ||
+        (m.position||'').toLowerCase().includes(directoryQuery))
+    : getSortedMembers();
+
+  if(members.length === 0){
+    grid.innerHTML = `<div class="empty"><div class="big">👥</div>No members added yet.</div>`;
+    return;
+  }
+  if(list.length === 0){
+    grid.innerHTML = `<div class="split-empty">No members found.</div>`;
+    return;
+  }
+  grid.innerHTML = `<div class="split-grid">${list.map(m=>{
+    const idx = members.indexOf(m);
+    const avatar = m.photo
+      ? `<img class="split-avatar" src="${m.photo}" alt="${escapeHtml(m.name)}">`
+      : `<div class="split-avatar-fallback" style="background:${colorFor(idx)}">${initials(m.name)}</div>`;
+    return `<div class="split-card" style="cursor:pointer;" data-directory-member="${m.id}">
+      ${avatar}
+      <div class="split-name" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</div>
+      ${m.position?`<div class="member-position">${escapeHtml(m.position)}</div>`:''}
+    </div>`;
+  }).join('')}</div>`;
+  grid.querySelectorAll('[data-directory-member]').forEach(card=>{
+    card.addEventListener('click', ()=>{
+      const m = members.find(x=>x.id===card.getAttribute('data-directory-member'));
+      if(m) showMemberCard(m);
+    });
+  });
+}
+
 function showMemberCard(m){
   const idx = members.indexOf(m);
   const avatar = m.photo
