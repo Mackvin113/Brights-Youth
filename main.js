@@ -797,13 +797,16 @@ document.getElementById('newPhotoInput').addEventListener('change', (e)=>{
     const img = new Image();
     img.onload = ()=>{
       const canvas = document.createElement('canvas');
-      const size = 160;
+      // Stored at 500x500 (not the old 160x160) so the full-screen photo
+      // viewer has real detail to show — 160px looked fine as a small
+      // circle but turned blurry once zoomed up.
+      const size = 500;
       canvas.width = size; canvas.height = size;
       const ctx = canvas.getContext('2d');
       const scale = Math.max(size/img.width, size/img.height);
       const w = img.width*scale, h = img.height*scale;
       ctx.drawImage(img, (size-w)/2, (size-h)/2, w, h);
-      newPhotoData = canvas.toDataURL('image/jpeg', 0.82);
+      newPhotoData = canvas.toDataURL('image/jpeg', 0.85);
       document.getElementById('newPhotoPreview').src = newPhotoData;
     };
     img.src = ev.target.result;
@@ -1334,23 +1337,82 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register('./sw.js').catch(err=>console.error('SW registration failed', err));
   });
 }
+
+function isIOSDevice(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS reporting as Mac
+}
+function isSafariBrowser(){
+  const ua = navigator.userAgent;
+  return /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(ua);
+}
+function isStandaloneMode(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
 let deferredInstallPrompt = null;
+const installBtn = document.getElementById('installAppBtn');
+
+// Chrome/Edge/Android path — a real native install prompt.
 window.addEventListener('beforeinstallprompt', (e)=>{
   e.preventDefault();
   deferredInstallPrompt = e;
-  const btn = document.getElementById('installAppBtn');
-  if(btn) btn.style.display = 'inline-flex';
+  if(installBtn) installBtn.style.display = 'inline-flex';
 });
-document.getElementById('installAppBtn').addEventListener('click', async ()=>{
-  if(!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt = null;
-  document.getElementById('installAppBtn').style.display = 'none';
+
+// Safari on iPhone/iPad/Mac never fires beforeinstallprompt — there's no
+// programmatic install API there. Show the button anyway with manual
+// instructions, since otherwise Apple users would never see a way in.
+if(!isStandaloneMode() && (isIOSDevice() || isSafariBrowser()) && installBtn){
+  installBtn.style.display = 'inline-flex';
+}
+
+installBtn.addEventListener('click', async ()=>{
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBtn.style.display = 'none';
+    return;
+  }
+  if(isIOSDevice()){
+    showMessage('On iPhone/iPad: tap the Share icon in Safari (the square with an arrow), then scroll down and tap "Add to Home Screen".');
+  } else if(isSafariBrowser()){
+    showMessage('On Mac: click the Share icon in Safari\'s toolbar (or the File menu), then choose "Add to Dock". This needs macOS Sonoma or later — on older macOS versions this isn\'t available in Safari.');
+  } else {
+    showMessage('Your browser doesn\'t support installing this as an app yet — try opening this site in Chrome instead.');
+  }
 });
+
 window.addEventListener('appinstalled', ()=>{
-  const btn = document.getElementById('installAppBtn');
-  if(btn) btn.style.display = 'none';
+  if(installBtn) installBtn.style.display = 'none';
+});
+
+/* ---------- profile photo viewer (WhatsApp-style zoom) ---------- */
+function openPhotoViewer(src, name){
+  const overlay = document.createElement('div');
+  overlay.className = 'photo-viewer-overlay';
+  overlay.innerHTML = `
+    <button type="button" class="photo-viewer-close" aria-label="Close">×</button>
+    <img class="photo-viewer-img" src="${src}" alt="${escapeHtml(name || 'Profile photo')}">
+    ${name ? `<div class="photo-viewer-name">${escapeHtml(name)}</div>` : ''}
+  `;
+  document.body.appendChild(overlay);
+  const close = ()=>{ overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e)=>{ if(e.key === 'Escape') close(); };
+  overlay.querySelector('.photo-viewer-close').addEventListener('click', close);
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) close(); });
+  document.addEventListener('keydown', onKey);
+}
+// One delegated listener covers every profile photo everywhere — the members
+// table, the Member directory, search results, the profile popup card, the
+// birthday banner, the upcoming-birthdays popup, and the add/edit form
+// preview — without needing to wire it up separately in each render function.
+document.body.addEventListener('click', (e)=>{
+  const img = e.target.closest('.avatar, .split-avatar, .member-card-avatar, .birthday-avatar, .photo-preview');
+  if(!img || !img.src || img.src.indexOf('data:') !== 0) return;
+  e.stopPropagation();
+  openPhotoViewer(img.src, img.alt);
 });
 
 /* ---------- init ---------- */
